@@ -1,6 +1,5 @@
 import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["KERAS_BACKEND"] = "tensorflow"
 
 import streamlit as st
 import numpy as np
@@ -11,7 +10,7 @@ import yfinance as yf
 import pandas as pd
 
 # -----------------------
-# 🧠 CUSTOM ATTENTION LAYER
+# 🧠 CUSTOM ATTENTION
 # -----------------------
 class Attention(tf.keras.layers.Layer):
     def build(self, input_shape):
@@ -23,17 +22,31 @@ class Attention(tf.keras.layers.Layer):
         a = tf.nn.softmax(e, axis=1)
         return tf.reduce_sum(x * a, axis=1)
 
+
+# -----------------------
+# 🧠 BUILD MODEL (MATCH NOTEBOOK)
+# -----------------------
+def build_model(input_shape, output_dim):
+    inputs = tf.keras.Input(shape=input_shape)
+
+    x = tf.keras.layers.LSTM(128, return_sequences=True)(inputs)
+    x = Attention()(x)
+
+    x = tf.keras.layers.Dense(64, activation="relu")(x)
+
+    # regression + classification heads
+    out_reg = tf.keras.layers.Dense(output_dim, name="reg")(x)
+    out_cls = tf.keras.layers.Dense(output_dim, activation="sigmoid", name="cls")(x)
+
+    model = tf.keras.Model(inputs, [out_reg, out_cls])
+    return model
+
+
 # -----------------------
 # 📂 LOAD EVERYTHING
 # -----------------------
 @st.cache_resource
 def load_all():
-    model = tf.keras.models.load_model(
-        "model/final_model.keras",
-        custom_objects={"Attention": Attention},
-        compile=False,
-        safe_mode=False   # 🔥 FIX
-    )
 
     scaler_X = joblib.load("model/scaler_X.pkl")
     scaler_y = joblib.load("model/scaler_y.pkl")
@@ -51,13 +64,22 @@ def load_all():
     except:
         SEQ_LEN = 20
 
+    input_shape = (SEQ_LEN, len(FEATURE_COLUMNS))
+    output_dim = len(STOCKS)
+
+    model = build_model(input_shape, output_dim)
+
+    # 🔥 LOAD WEIGHTS (CRITICAL FIX)
+    model.load_weights("model/model.weights.h5")
+
     return model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN
 
 
 model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN = load_all()
 
+
 # -----------------------
-# 📈 PREDICTION LOGIC (SAME AS NOTEBOOK)
+# 📈 PREDICTION (NOTEBOOK SAME)
 # -----------------------
 def predict_live():
 
@@ -75,6 +97,7 @@ def predict_live():
 
     df_feat = df_feat.dropna()
 
+    # ensure all columns
     for col in FEATURE_COLUMNS:
         if col not in df_feat.columns:
             df_feat[col] = 0
@@ -87,7 +110,7 @@ def predict_live():
     pred_reg, pred_cls = model.predict(X, verbose=0)
     pred = scaler_y.inverse_transform(pred_reg)[0]
 
-    # 🔥 YOUR NOTEBOOK LOGIC
+    # 🔥 EXACT NOTEBOOK LOGIC
     pred = pred - np.mean(pred)
     pred = 0.7 * pred + 0.3 * np.mean(pred)
     pred = np.clip(pred, -0.08, 0.08)
@@ -102,7 +125,7 @@ def predict_live():
 
 
 # -----------------------
-# 📊 SIGNAL LOGIC
+# 📊 SIGNALS
 # -----------------------
 def generate_signals(pred, cls):
 
@@ -128,13 +151,12 @@ def generate_signals(pred, cls):
 
 
 # -----------------------
-# 🎨 UI
+# 🎨 UI (MODERN DASHBOARD)
 # -----------------------
 st.set_page_config(page_title="AI Stock Dashboard", layout="wide")
 
 st.title("📈 Multi-Stock AI Prediction Dashboard")
-
-st.markdown("### 🔍 Powered by LSTM + Attention Model")
+st.caption("Deep Learning Model: LSTM + Attention")
 
 if st.button("🚀 Run Prediction"):
 
@@ -143,23 +165,7 @@ if st.button("🚀 Run Prediction"):
         last_price, pred, cls, next_price = predict_live()
         signals, confidence = generate_signals(pred, cls)
 
-        results = []
-
-        for i, s in enumerate(STOCKS):
-            results.append({
-                "Stock": s,
-                "Current Price": round(float(last_price[i]), 2),
-                "Predicted Return": round(float(pred[i] * 100), 2),
-                "Next Price": round(float(next_price[i]), 2),
-                "Signal": signals[i],
-                "Confidence": round(float(confidence[i]), 2)
-            })
-
-        df_result = pd.DataFrame(results)
-
-        # -----------------------
-        # 📊 METRICS ROW
-        # -----------------------
+        # METRICS
         cols = st.columns(len(STOCKS))
 
         for i, col in enumerate(cols):
@@ -171,8 +177,20 @@ if st.button("🚀 Run Prediction"):
 
         st.markdown("---")
 
-        # -----------------------
-        # 📋 TABLE
-        # -----------------------
+        # TABLE
+        results = []
+
+        for i, s in enumerate(STOCKS):
+            results.append({
+                "Stock": s,
+                "Price": round(float(last_price[i]), 2),
+                "Return %": round(float(pred[i] * 100), 2),
+                "Next Price": round(float(next_price[i]), 2),
+                "Signal": signals[i],
+                "Confidence": round(float(confidence[i]), 2)
+            })
+
+        df_result = pd.DataFrame(results)
+
         st.subheader("📊 Detailed Predictions")
         st.dataframe(df_result, use_container_width=True)
