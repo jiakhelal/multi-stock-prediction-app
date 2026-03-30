@@ -1,7 +1,7 @@
-streamlit
+streamlit==1.32.0
 tensorflow==2.19.0
-numpy
-pandas
-scikit-learn
-joblib
-yfinance
+numpy==1.26.4
+pandas==2.1.4
+scikit-learn==1.3.2
+joblib==1.3.2
+yfinance==0.2.37
