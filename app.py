@@ -11,7 +11,7 @@ import pandas as pd
 
 
 # =========================
-# 🧠 CUSTOM ATTENTION LAYER
+# 🧠 CUSTOM ATTENTION
 # =========================
 class Attention(tf.keras.layers.Layer):
 
@@ -37,16 +37,14 @@ def build_model(input_shape, output_dim):
 
     x = tf.keras.layers.Dense(64, activation="relu")(x)
 
-    out_reg = tf.keras.layers.Dense(output_dim, name="regression")(x)
-    out_cls = tf.keras.layers.Dense(output_dim, activation="sigmoid", name="classification")(x)
+    out_reg = tf.keras.layers.Dense(output_dim)(x)
+    out_cls = tf.keras.layers.Dense(output_dim, activation="sigmoid")(x)
 
-    model = tf.keras.Model(inputs, [out_reg, out_cls])
-
-    return model
+    return tf.keras.Model(inputs, [out_reg, out_cls])
 
 
 # =========================
-# 📂 LOAD EVERYTHING
+# 📂 LOAD FILES
 # =========================
 @st.cache_resource
 def load_all():
@@ -65,10 +63,7 @@ def load_all():
 
     SEQ_LEN = CONFIG.get("SEQ_LEN", 20)
 
-    # Build model
     model = build_model((SEQ_LEN, len(FEATURE_COLUMNS)), len(STOCKS))
-
-    # Load weights
     model.load_weights("model/model.weights.h5")
 
     return model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN
@@ -78,13 +73,12 @@ model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN = load_all()
 
 
 # =========================
-# 📈 PREDICTION FUNCTION
+# 📈 PREDICTION (ALL STOCKS)
 # =========================
-def predict_live():
+def predict_all():
 
     df = yf.download(STOCKS, period="60d")["Close"]
 
-    # Fix if single stock
     if isinstance(df, pd.Series):
         df = df.to_frame()
 
@@ -99,13 +93,10 @@ def predict_live():
         df_feat[f"{s}_STD"] = df_feat[s].rolling(21).std()
         df_feat[f"{s}_MOM"] = df_feat[s] - df_feat[s].shift(5)
         df_feat[f"{s}_ROC"] = df_feat[s].pct_change(5)
-
-        # same as training (no sentiment API)
         df_feat[f"{s}_SENT"] = 0
 
     df_feat = df_feat.dropna()
 
-    # Ensure same feature order
     for col in FEATURE_COLUMNS:
         if col not in df_feat.columns:
             df_feat[col] = 0
@@ -119,7 +110,7 @@ def predict_live():
 
     pred = scaler_y.inverse_transform(pred_reg)[0]
 
-    # SAME notebook logic
+    # same notebook logic
     pred = pred - np.mean(pred)
     pred = 0.7 * pred + 0.3 * np.mean(pred)
     pred = np.clip(pred, -0.08, 0.08)
@@ -134,7 +125,7 @@ def predict_live():
 
 
 # =========================
-# 📊 SIGNAL LOGIC
+# 📊 SIGNALS
 # =========================
 def generate_signals(pred, cls):
 
@@ -161,33 +152,45 @@ def generate_signals(pred, cls):
 
 
 # =========================
-# 🌐 STREAMLIT UI
+# 🌐 UI
 # =========================
 st.set_page_config(page_title="AI Stock Dashboard", layout="wide")
 
 st.title("📈 Multi-Stock AI Prediction Dashboard")
-st.caption("Deep Learning Model: LSTM + Attention")
+st.caption("LSTM + Attention | Trained Multi-Stock Model")
+
+# ✅ STOCK SELECTOR (SAFE)
+selected_stocks = st.multiselect(
+    "📊 Select Stocks to Display",
+    options=STOCKS,
+    default=STOCKS[:3]
+)
 
 if st.button("🚀 Run Prediction"):
 
-    with st.spinner("Fetching data & predicting..."):
+    with st.spinner("Running model..."):
 
-        last_price, pred, cls, next_price = predict_live()
+        last_price, pred, cls, next_price = predict_all()
         signals, confidence = generate_signals(pred, cls)
 
     st.success("Prediction Complete!")
 
-    cols = st.columns(len(STOCKS))
+    # 🔥 FILTER ONLY SELECTED STOCKS
+    indices = [STOCKS.index(s) for s in selected_stocks]
 
-    for i, s in enumerate(STOCKS):
+    cols = st.columns(len(selected_stocks))
+
+    for i, idx in enumerate(indices):
+
+        s = STOCKS[idx]
 
         with cols[i]:
             st.metric(
                 label=s,
-                value=f"₹{last_price[i]:.2f}",
-                delta=f"{pred[i]*100:.2f}%"
+                value=f"₹{last_price[idx]:.2f}",
+                delta=f"{pred[idx]*100:.2f}%"
             )
 
-            st.write(f"📊 Next Price: ₹{next_price[i]:.2f}")
-            st.write(f"📢 Signal: **{signals[i]}**")
-            st.write(f"🎯 Confidence: {confidence[i]*100:.1f}%")
+            st.write(f"📊 Next Price: ₹{next_price[idx]:.2f}")
+            st.write(f"📢 Signal: **{signals[idx]}**")
+            st.write(f"🎯 Confidence: {confidence[idx]*100:.1f}%")
