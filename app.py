@@ -9,8 +9,9 @@ import tensorflow as tf
 import yfinance as yf
 import pandas as pd
 
+
 # =========================
-# 🧠 CUSTOM ATTENTION LAYER (FIXED INDENTATION)
+# 🧠 CUSTOM ATTENTION LAYER
 # =========================
 class Attention(tf.keras.layers.Layer):
 
@@ -25,7 +26,7 @@ class Attention(tf.keras.layers.Layer):
 
 
 # =========================
-# 🧠 BUILD MODEL ARCHITECTURE (IMPORTANT)
+# 🧠 MODEL ARCHITECTURE
 # =========================
 def build_model(input_shape, output_dim):
 
@@ -50,24 +51,24 @@ def build_model(input_shape, output_dim):
 @st.cache_resource
 def load_all():
 
-    scaler_X = joblib.load("scaler_X.pkl")
-    scaler_y = joblib.load("scaler_y.pkl")
+    scaler_X = joblib.load("model/scaler_X.pkl")
+    scaler_y = joblib.load("model/scaler_y.pkl")
 
-    with open("stocks.json") as f:
+    with open("model/stocks.json") as f:
         STOCKS = json.load(f)
 
-    with open("feature_columns.json") as f:
+    with open("model/feature_columns.json") as f:
         FEATURE_COLUMNS = json.load(f)
 
-    with open("config.json") as f:
+    with open("model/config.json") as f:
         CONFIG = json.load(f)
 
     SEQ_LEN = CONFIG.get("SEQ_LEN", 20)
 
-    # 🔥 BUILD MODEL SAME AS TRAINING
+    # Build model
     model = build_model((SEQ_LEN, len(FEATURE_COLUMNS)), len(STOCKS))
 
-    # 🔥 LOAD WEIGHTS
+    # Load weights
     model.load_weights("model/model.weights.h5")
 
     return model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN
@@ -77,13 +78,13 @@ model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN = load_all()
 
 
 # =========================
-# 📈 PREDICTION FUNCTION (NOTEBOOK LOGIC)
+# 📈 PREDICTION FUNCTION
 # =========================
 def predict_live():
 
     df = yf.download(STOCKS, period="60d")["Close"]
 
-    # 🔥 FIX MULTI-INDEX ISSUE
+    # Fix if single stock
     if isinstance(df, pd.Series):
         df = df.to_frame()
 
@@ -99,12 +100,12 @@ def predict_live():
         df_feat[f"{s}_MOM"] = df_feat[s] - df_feat[s].shift(5)
         df_feat[f"{s}_ROC"] = df_feat[s].pct_change(5)
 
-        # No sentiment (kept same as notebook fallback)
+        # same as training (no sentiment API)
         df_feat[f"{s}_SENT"] = 0
 
     df_feat = df_feat.dropna()
 
-    # Ensure all columns exist
+    # Ensure same feature order
     for col in FEATURE_COLUMNS:
         if col not in df_feat.columns:
             df_feat[col] = 0
@@ -118,7 +119,7 @@ def predict_live():
 
     pred = scaler_y.inverse_transform(pred_reg)[0]
 
-    # 🔥 SAME POST-PROCESSING (IMPORTANT)
+    # SAME notebook logic
     pred = pred - np.mean(pred)
     pred = 0.7 * pred + 0.3 * np.mean(pred)
     pred = np.clip(pred, -0.08, 0.08)
@@ -133,7 +134,7 @@ def predict_live():
 
 
 # =========================
-# 📊 SIGNAL GENERATION
+# 📊 SIGNAL LOGIC
 # =========================
 def generate_signals(pred, cls):
 
@@ -160,16 +161,16 @@ def generate_signals(pred, cls):
 
 
 # =========================
-# 🌐 UI
+# 🌐 STREAMLIT UI
 # =========================
 st.set_page_config(page_title="AI Stock Dashboard", layout="wide")
 
 st.title("📈 Multi-Stock AI Prediction Dashboard")
-st.caption("LSTM + Attention | Real-time Market Prediction")
+st.caption("Deep Learning Model: LSTM + Attention")
 
 if st.button("🚀 Run Prediction"):
 
-    with st.spinner("Analyzing market..."):
+    with st.spinner("Fetching data & predicting..."):
 
         last_price, pred, cls, next_price = predict_live()
         signals, confidence = generate_signals(pred, cls)
