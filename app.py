@@ -9,6 +9,8 @@ import tensorflow as tf
 import yfinance as yf
 import pandas as pd
 
+from transformers import pipeline
+
 # -----------------------
 # 🧠 CUSTOM ATTENTION
 # -----------------------
@@ -24,7 +26,7 @@ class Attention(tf.keras.layers.Layer):
 
 
 # -----------------------
-# 🧠 BUILD MODEL (MATCH NOTEBOOK)
+# 🧠 BUILD MODEL
 # -----------------------
 def build_model(input_shape, output_dim):
     inputs = tf.keras.Input(shape=input_shape)
@@ -34,12 +36,34 @@ def build_model(input_shape, output_dim):
 
     x = tf.keras.layers.Dense(64, activation="relu")(x)
 
-    # regression + classification heads
     out_reg = tf.keras.layers.Dense(output_dim, name="reg")(x)
     out_cls = tf.keras.layers.Dense(output_dim, activation="sigmoid", name="cls")(x)
 
-    model = tf.keras.Model(inputs, [out_reg, out_cls])
-    return model
+    return tf.keras.Model(inputs, [out_reg, out_cls])
+
+
+# -----------------------
+# 🤖 LOAD FINBERT
+# -----------------------
+@st.cache_resource
+def load_sentiment_model():
+    return pipeline("sentiment-analysis", model="ProsusAI/finbert")
+
+
+sentiment_model = load_sentiment_model()
+
+
+def get_sentiment_score(text):
+    try:
+        result = sentiment_model(text[:512])[0]
+        if result["label"] == "positive":
+            return result["score"]
+        elif result["label"] == "negative":
+            return -result["score"]
+        else:
+            return 0
+    except:
+        return 0
 
 
 # -----------------------
@@ -69,7 +93,7 @@ def load_all():
 
     model = build_model(input_shape, output_dim)
 
-    # 🔥 LOAD WEIGHTS (CRITICAL FIX)
+    # ✅ LOAD WEIGHTS
     model.load_weights("model/model.weights.h5")
 
     return model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN
@@ -79,25 +103,41 @@ model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN = load_all()
 
 
 # -----------------------
-# 📈 PREDICTION (NOTEBOOK SAME)
+# 📈 PREDICTION
 # -----------------------
 def predict_live():
 
-    df = yf.download(STOCKS, period="60d")["Close"].dropna()
+    df = yf.download(STOCKS, period="60d")
+
+    # FIX MULTI STOCK
+    if len(STOCKS) > 1:
+        df = df["Close"]
+    else:
+        df = df[["Close"]]
+        df.columns = STOCKS
+
+    df = df.dropna()
     df_feat = df.copy()
 
     for s in STOCKS:
+
+        if s not in df_feat.columns:
+            continue
+
         df_feat[f"{s}_RET"] = df_feat[s].pct_change()
         df_feat[f"{s}_MA7"] = df_feat[s].rolling(7).mean()
         df_feat[f"{s}_MA21"] = df_feat[s].rolling(21).mean()
         df_feat[f"{s}_STD"] = df_feat[s].rolling(21).std()
         df_feat[f"{s}_MOM"] = df_feat[s] - df_feat[s].shift(5)
         df_feat[f"{s}_ROC"] = df_feat[s].pct_change(5)
-        df_feat[f"{s}_SENT"] = 0
+
+        # 🔥 FINBERT SENTIMENT
+        sentiment = get_sentiment_score(f"{s} stock market news")
+        df_feat[f"{s}_SENT"] = sentiment
 
     df_feat = df_feat.dropna()
 
-    # ensure all columns
+    # MATCH TRAIN FEATURES
     for col in FEATURE_COLUMNS:
         if col not in df_feat.columns:
             df_feat[col] = 0
@@ -110,7 +150,7 @@ def predict_live():
     pred_reg, pred_cls = model.predict(X, verbose=0)
     pred = scaler_y.inverse_transform(pred_reg)[0]
 
-    # 🔥 EXACT NOTEBOOK LOGIC
+    # SAME NOTEBOOK LOGIC
     pred = pred - np.mean(pred)
     pred = 0.7 * pred + 0.3 * np.mean(pred)
     pred = np.clip(pred, -0.08, 0.08)
@@ -151,40 +191,38 @@ def generate_signals(pred, cls):
 
 
 # -----------------------
-# 🎨 UI (MODERN DASHBOARD)
+# 🎨 UI
 # -----------------------
 st.set_page_config(page_title="AI Stock Dashboard", layout="wide")
 
 st.title("📈 Multi-Stock AI Prediction Dashboard")
-st.caption("Deep Learning Model: LSTM + Attention")
+st.caption("LSTM + Attention + FinBERT Sentiment")
 
 if st.button("🚀 Run Prediction"):
 
-    with st.spinner("Fetching data & predicting..."):
+    with st.spinner("Running AI model..."):
 
         last_price, pred, cls, next_price = predict_live()
         signals, confidence = generate_signals(pred, cls)
 
-        # METRICS
         cols = st.columns(len(STOCKS))
 
         for i, col in enumerate(cols):
             col.metric(
-                label=STOCKS[i],
-                value=f"₹{round(last_price[i],2)}",
-                delta=f"{round(pred[i]*100,2)}%"
+                STOCKS[i],
+                f"₹{round(last_price[i],2)}",
+                f"{round(pred[i]*100,2)}%"
             )
 
         st.markdown("---")
 
-        # TABLE
         results = []
 
         for i, s in enumerate(STOCKS):
             results.append({
                 "Stock": s,
                 "Price": round(float(last_price[i]), 2),
-                "Return %": round(float(pred[i] * 100), 2),
+                "Return %": round(float(pred[i]*100), 2),
                 "Next Price": round(float(next_price[i]), 2),
                 "Signal": signals[i],
                 "Confidence": round(float(confidence[i]), 2)
