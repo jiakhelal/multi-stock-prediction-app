@@ -9,12 +9,10 @@ import tensorflow as tf
 import yfinance as yf
 import pandas as pd
 
-
 # =========================
-# 🧠 CUSTOM ATTENTION
+# 🧠 CUSTOM ATTENTION LAYER
 # =========================
 class Attention(tf.keras.layers.Layer):
-
     def build(self, input_shape):
         self.W = self.add_weight(shape=(input_shape[-1], 1))
         self.b = self.add_weight(shape=(input_shape[1], 1))
@@ -24,30 +22,17 @@ class Attention(tf.keras.layers.Layer):
         a = tf.nn.softmax(e, axis=1)
         return tf.reduce_sum(x * a, axis=1)
 
-
 # =========================
-# 🧠 MODEL ARCHITECTURE
-# =========================
-def build_model(input_shape, output_dim):
-
-    inputs = tf.keras.Input(shape=input_shape)
-
-    x = tf.keras.layers.LSTM(128, return_sequences=True)(inputs)
-    x = Attention()(x)
-
-    x = tf.keras.layers.Dense(64, activation="relu")(x)
-
-    out_reg = tf.keras.layers.Dense(output_dim)(x)
-    out_cls = tf.keras.layers.Dense(output_dim, activation="sigmoid")(x)
-
-    return tf.keras.Model(inputs, [out_reg, out_cls])
-
-
-# =========================
-# 📂 LOAD FILES
+# LOAD ALL FILES
 # =========================
 @st.cache_resource
 def load_all():
+
+    model = tf.keras.models.load_model(
+        "model/model.weights.h5",
+        custom_objects={"Attention": Attention},
+        compile=False
+    )
 
     scaler_X = joblib.load("model/scaler_X.pkl")
     scaler_y = joblib.load("model/scaler_y.pkl")
@@ -60,29 +45,35 @@ def load_all():
 
     with open("model/config.json") as f:
         CONFIG = json.load(f)
-
-    SEQ_LEN = CONFIG.get("SEQ_LEN", 20)
-
-    model = build_model((SEQ_LEN, len(FEATURE_COLUMNS)), len(STOCKS))
-    model.load_weights("model/model.weights.h5")
+        SEQ_LEN = CONFIG.get("SEQ_LEN", 20)
 
     return model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN
 
 
 model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN = load_all()
 
+# =========================
+# STREAMLIT UI
+# =========================
+st.set_page_config(page_title="Stock AI", layout="wide")
+
+st.title("📈 Multi-Stock AI Prediction Dashboard")
+st.caption("LSTM + Attention | Multi-Stock Model")
+
+# 👉 ONLY FOR DISPLAY (NOT MODEL INPUT)
+selected_stocks = st.multiselect(
+    "📊 Select Stocks to View",
+    STOCKS,
+    default=STOCKS[:3]
+)
 
 # =========================
-# 📈 PREDICTION (ALL STOCKS)
+# PREDICTION FUNCTION
 # =========================
 def predict_all():
 
-    df = yf.download(STOCKS, period="60d")["Close"]
-
-    if isinstance(df, pd.Series):
-        df = df.to_frame()
-
-    df = df.dropna()
+    # ALWAYS use full STOCKS list (IMPORTANT)
+    df = yf.download(STOCKS, period="60d")["Close"].dropna()
 
     df_feat = df.copy()
 
@@ -93,10 +84,11 @@ def predict_all():
         df_feat[f"{s}_STD"] = df_feat[s].rolling(21).std()
         df_feat[f"{s}_MOM"] = df_feat[s] - df_feat[s].shift(5)
         df_feat[f"{s}_ROC"] = df_feat[s].pct_change(5)
-        df_feat[f"{s}_SENT"] = 0
+        df_feat[f"{s}_SENT"] = 0  # no API
 
     df_feat = df_feat.dropna()
 
+    # ensure same columns
     for col in FEATURE_COLUMNS:
         if col not in df_feat.columns:
             df_feat[col] = 0
@@ -110,7 +102,7 @@ def predict_all():
 
     pred = scaler_y.inverse_transform(pred_reg)[0]
 
-    # same notebook logic
+    # 🔥 same logic as notebook
     pred = pred - np.mean(pred)
     pred = 0.7 * pred + 0.3 * np.mean(pred)
     pred = np.clip(pred, -0.08, 0.08)
@@ -125,72 +117,42 @@ def predict_all():
 
 
 # =========================
-# 📊 SIGNALS
+# RUN BUTTON
 # =========================
-def generate_signals(pred, cls):
-
-    signals = []
-    confidence = []
-
-    for r, c in zip(pred, cls):
-
-        conf = min(abs(r) * 12 + abs(c - 0.5), 0.9)
-        confidence.append(conf)
-
-        if r > 0.02:
-            signals.append("STRONG BUY")
-        elif r > 0.005:
-            signals.append("BUY")
-        elif r < -0.02:
-            signals.append("STRONG SELL")
-        elif r < -0.005:
-            signals.append("SELL")
-        else:
-            signals.append("HOLD")
-
-    return signals, confidence
-
-
-# =========================
-# 🌐 UI
-# =========================
-st.set_page_config(page_title="AI Stock Dashboard", layout="wide")
-
-st.title("📈 Multi-Stock AI Prediction Dashboard")
-st.caption("LSTM + Attention | Trained Multi-Stock Model")
-
-# ✅ STOCK SELECTOR (SAFE)
-selected_stocks = st.multiselect(
-    "📊 Select Stocks to Display",
-    options=STOCKS,
-    default=STOCKS[:3]
-)
-
 if st.button("🚀 Run Prediction"):
 
-    with st.spinner("Running model..."):
+    last_price, pred, cls, next_price = predict_all()
 
-        last_price, pred, cls, next_price = predict_all()
-        signals, confidence = generate_signals(pred, cls)
+    st.subheader("📊 Predictions")
 
-    st.success("Prediction Complete!")
+    for s in selected_stocks:
+        idx = STOCKS.index(s)
 
-    # 🔥 FILTER ONLY SELECTED STOCKS
-    indices = [STOCKS.index(s) for s in selected_stocks]
+        col1, col2, col3 = st.columns(3)
 
-    cols = st.columns(len(selected_stocks))
+        col1.metric("💰 Current", f"{last_price[idx]:.2f}")
+        col2.metric("📈 Return", f"{pred[idx]*100:.2f}%")
+        col3.metric("🔮 Next Price", f"{next_price[idx]:.2f}")
 
-    for i, idx in enumerate(indices):
+        # signal
+        if pred[idx] > 0.02:
+            signal = "STRONG BUY"
+        elif pred[idx] > 0.005:
+            signal = "BUY"
+        elif pred[idx] < -0.02:
+            signal = "STRONG SELL"
+        elif pred[idx] < -0.005:
+            signal = "SELL"
+        else:
+            signal = "HOLD"
 
-        s = STOCKS[idx]
+        confidence = min(abs(pred[idx]) * 12 + abs(cls[idx] - 0.5), 0.9)
 
-        with cols[i]:
-            st.metric(
-                label=s,
-                value=f"₹{last_price[idx]:.2f}",
-                delta=f"{pred[idx]*100:.2f}%"
-            )
+        st.write(f"📢 Signal: **{signal}**")
+        st.progress(float(confidence))
 
-            st.write(f"📊 Next Price: ₹{next_price[idx]:.2f}")
-            st.write(f"📢 Signal: **{signals[idx]}**")
-            st.write(f"🎯 Confidence: {confidence[idx]*100:.1f}%")
+        # chart
+        hist = yf.download(s, period="60d")
+        st.line_chart(hist["Close"])
+
+        st.divider()
