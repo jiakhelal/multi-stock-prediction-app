@@ -27,8 +27,6 @@ class Attention(tf.keras.layers.Layer):
 # =========================
 @st.cache_resource
 def load_all():
-
-    # ✅ LOAD FULL MODEL (.keras)
     model = tf.keras.models.load_model(
         "model/final_model.keras",
         custom_objects={"Attention": Attention},
@@ -54,14 +52,13 @@ def load_all():
 model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN = load_all()
 
 # =========================
-# STREAMLIT UI
+# UI
 # =========================
 st.set_page_config(page_title="Stock AI", layout="wide")
 
 st.title("📈 Multi-Stock AI Prediction Dashboard")
 st.caption("LSTM + Attention | Multi-Stock Model")
 
-# 👉 USER SELECTS WHAT TO DISPLAY (NOT MODEL INPUT)
 selected_stocks = st.multiselect(
     "📊 Select Stocks to View",
     STOCKS,
@@ -69,25 +66,68 @@ selected_stocks = st.multiselect(
 )
 
 # =========================
-# PREDICTION FUNCTION
+# SAFE DATA FETCH
+# =========================
+def fetch_data():
+    try:
+        df = yf.download(STOCKS, period="60d")["Close"]
+    except:
+        st.error("❌ Failed to fetch stock data")
+        return None
+
+    if df is None or df.empty:
+        st.error("❌ No data received from yfinance")
+        return None
+
+    # 🔥 Remove completely broken stocks
+    df = df.dropna(axis=1, how="all")
+
+    if df.shape[1] == 0:
+        st.error("❌ All stocks failed to load")
+        return None
+
+    df = df.dropna()
+
+    return df
+
+# =========================
+# PREDICTION
 # =========================
 def predict_all():
 
-    # ⚠️ ALWAYS use FULL STOCK LIST
-    df = yf.download(STOCKS, period="60d")["Close"].dropna()
+    df = fetch_data()
+    if df is None:
+        return None
+
+    valid_stocks = df.columns.tolist()
 
     df_feat = df.copy()
 
-    for s in STOCKS:
-        df_feat[f"{s}_RET"] = df_feat[s].pct_change()
-        df_feat[f"{s}_MA7"] = df_feat[s].rolling(7).mean()
-        df_feat[f"{s}_MA21"] = df_feat[s].rolling(21).mean()
-        df_feat[f"{s}_STD"] = df_feat[s].rolling(21).std()
-        df_feat[f"{s}_MOM"] = df_feat[s] - df_feat[s].shift(5)
-        df_feat[f"{s}_ROC"] = df_feat[s].pct_change(5)
-        df_feat[f"{s}_SENT"] = 0  # no API (safe)
+    # 🔥 Feature Engineering (SAFE)
+    for s in valid_stocks:
+        try:
+            series = df_feat[s]
+
+            if series.isnull().all():
+                continue
+
+            df_feat[f"{s}_RET"] = series.pct_change()
+            df_feat[f"{s}_MA7"] = series.rolling(7).mean()
+            df_feat[f"{s}_MA21"] = series.rolling(21).mean()
+            df_feat[f"{s}_STD"] = series.rolling(21).std()
+            df_feat[f"{s}_MOM"] = series - series.shift(5)
+            df_feat[f"{s}_ROC"] = series.pct_change(5)
+            df_feat[f"{s}_SENT"] = 0
+
+        except Exception as e:
+            print(f"Skipping {s}: {e}")
+            continue
 
     df_feat = df_feat.dropna()
+
+    if len(df_feat) < SEQ_LEN:
+        st.error("❌ Not enough data after preprocessing")
+        return None
 
     # ensure feature consistency
     for col in FEATURE_COLUMNS:
@@ -96,6 +136,7 @@ def predict_all():
 
     df_feat = df_feat[FEATURE_COLUMNS]
 
+    # scaling
     X = scaler_X.transform(df_feat)
     X = X[-SEQ_LEN:].reshape(1, SEQ_LEN, X.shape[1])
 
@@ -103,7 +144,7 @@ def predict_all():
 
     pred = scaler_y.inverse_transform(pred_reg)[0]
 
-    # 🔥 SAME LOGIC AS NOTEBOOK
+    # 🔥 smoothing logic (same as training)
     pred = pred - np.mean(pred)
     pred = 0.7 * pred + 0.3 * np.mean(pred)
     pred = np.clip(pred, -0.08, 0.08)
@@ -114,20 +155,29 @@ def predict_all():
     last_price = df.iloc[-1].values
     next_price = last_price * (1 + pred)
 
-    return last_price, pred, pred_cls[0], next_price
-
+    return last_price, pred, pred_cls[0], next_price, valid_stocks
 
 # =========================
-# RUN PREDICTION
+# RUN
 # =========================
 if st.button("🚀 Run Prediction"):
 
-    last_price, pred, cls, next_price = predict_all()
+    result = predict_all()
+
+    if result is None:
+        st.stop()
+
+    last_price, pred, cls, next_price, valid_stocks = result
 
     st.subheader("📊 Predictions")
 
     for s in selected_stocks:
-        idx = STOCKS.index(s)
+
+        if s not in valid_stocks:
+            st.warning(f"⚠️ {s} data not available")
+            continue
+
+        idx = valid_stocks.index(s)
 
         col1, col2, col3 = st.columns(3)
 
@@ -135,7 +185,7 @@ if st.button("🚀 Run Prediction"):
         col2.metric("📈 Return", f"{pred[idx]*100:.2f}%")
         col3.metric("🔮 Next Price", f"{next_price[idx]:.2f}")
 
-        # SIGNAL LOGIC
+        # SIGNAL
         if pred[idx] > 0.02:
             signal = "STRONG BUY"
         elif pred[idx] > 0.005:
@@ -152,8 +202,9 @@ if st.button("🚀 Run Prediction"):
         st.write(f"📢 Signal: **{signal}**")
         st.progress(float(confidence))
 
-        # 📉 CHART
+        # chart
         hist = yf.download(s, period="60d")
-        st.line_chart(hist["Close"])
+        if not hist.empty:
+            st.line_chart(hist["Close"])
 
         st.divider()
