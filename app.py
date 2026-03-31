@@ -28,8 +28,9 @@ class Attention(tf.keras.layers.Layer):
 @st.cache_resource
 def load_all():
 
+    # ✅ LOAD FULL MODEL (.keras)
     model = tf.keras.models.load_model(
-        "model/model.weights.h5",
+        "model/final_model.keras",
         custom_objects={"Attention": Attention},
         compile=False
     )
@@ -60,7 +61,7 @@ st.set_page_config(page_title="Stock AI", layout="wide")
 st.title("📈 Multi-Stock AI Prediction Dashboard")
 st.caption("LSTM + Attention | Multi-Stock Model")
 
-# 👉 ONLY FOR DISPLAY (NOT MODEL INPUT)
+# 👉 USER SELECTS WHAT TO DISPLAY (NOT MODEL INPUT)
 selected_stocks = st.multiselect(
     "📊 Select Stocks to View",
     STOCKS,
@@ -72,7 +73,7 @@ selected_stocks = st.multiselect(
 # =========================
 def predict_all():
 
-    # ALWAYS use full STOCKS list (IMPORTANT)
+    # ⚠️ ALWAYS use FULL STOCK LIST
     df = yf.download(STOCKS, period="60d")["Close"].dropna()
 
     df_feat = df.copy()
@@ -84,11 +85,11 @@ def predict_all():
         df_feat[f"{s}_STD"] = df_feat[s].rolling(21).std()
         df_feat[f"{s}_MOM"] = df_feat[s] - df_feat[s].shift(5)
         df_feat[f"{s}_ROC"] = df_feat[s].pct_change(5)
-        df_feat[f"{s}_SENT"] = 0  # no API
+        df_feat[f"{s}_SENT"] = 0  # no API (safe)
 
     df_feat = df_feat.dropna()
 
-    # ensure same columns
+    # ensure feature consistency
     for col in FEATURE_COLUMNS:
         if col not in df_feat.columns:
             df_feat[col] = 0
@@ -102,7 +103,7 @@ def predict_all():
 
     pred = scaler_y.inverse_transform(pred_reg)[0]
 
-    # 🔥 same logic as notebook
+    # 🔥 SAME LOGIC AS NOTEBOOK
     pred = pred - np.mean(pred)
     pred = 0.7 * pred + 0.3 * np.mean(pred)
     pred = np.clip(pred, -0.08, 0.08)
@@ -117,7 +118,7 @@ def predict_all():
 
 
 # =========================
-# RUN BUTTON
+# RUN PREDICTION
 # =========================
 if st.button("🚀 Run Prediction"):
 
@@ -130,11 +131,11 @@ if st.button("🚀 Run Prediction"):
 
         col1, col2, col3 = st.columns(3)
 
-        col1.metric("💰 Current", f"{last_price[idx]:.2f}")
+        col1.metric("💰 Current Price", f"{last_price[idx]:.2f}")
         col2.metric("📈 Return", f"{pred[idx]*100:.2f}%")
         col3.metric("🔮 Next Price", f"{next_price[idx]:.2f}")
 
-        # signal
+        # SIGNAL LOGIC
         if pred[idx] > 0.02:
             signal = "STRONG BUY"
         elif pred[idx] > 0.005:
@@ -151,7 +152,7 @@ if st.button("🚀 Run Prediction"):
         st.write(f"📢 Signal: **{signal}**")
         st.progress(float(confidence))
 
-        # chart
+        # 📉 CHART
         hist = yf.download(s, period="60d")
         st.line_chart(hist["Close"])
 
