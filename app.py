@@ -69,19 +69,32 @@ st.markdown("""
 """)
 
 # =========================
-# FETCH DATA (NOTEBOOK EXACT)
+# FETCH DATA (FIXED)
 # =========================
 @st.cache_data(ttl=3600)
 def fetch_data():
-    try:
-        df = yf.download(STOCKS, start="2019-01-01")["Close"]
-    except:
+    data = {}
+
+    for stock in STOCKS:
+        try:
+            df = yf.download(stock, start="2019-01-01")
+
+            if df is None or df.empty:
+                continue
+
+            data[stock] = df["Close"]
+
+        except Exception as e:
+            print(f"Error loading {stock}: {e}")
+            continue
+
+    if len(data) == 0:
         return None
 
-    if df is None or df.empty:
-        return None
+    df = pd.DataFrame(data)
 
-    df = df.dropna()  # SAME as notebook
+    # SAME AS NOTEBOOK
+    df = df.dropna()
 
     if df.empty:
         return None
@@ -89,7 +102,7 @@ def fetch_data():
     return df
 
 # =========================
-# PREDICTION (NOTEBOOK LOGIC)
+# PREDICTION
 # =========================
 def predict():
 
@@ -100,7 +113,7 @@ def predict():
 
     df_feat = df.copy()
 
-    # EXACT feature logic
+    # EXACT FEATURE LOGIC
     for s in STOCKS:
         df_feat[f"{s}_RET"] = df_feat[s].pct_change()
         df_feat[f"{s}_MA7"] = df_feat[s].rolling(7).mean()
@@ -116,14 +129,14 @@ def predict():
         st.error("❌ Not enough processed data")
         return None
 
-    # feature alignment
+    # FEATURE ALIGNMENT
     for col in FEATURE_COLUMNS:
         if col not in df_feat.columns:
             df_feat[col] = 0
 
     df_feat = df_feat[FEATURE_COLUMNS]
 
-    # scaling
+    # SCALE
     X = scaler_X.transform(df_feat)
     X = X[-SEQ_LEN:].reshape(1, SEQ_LEN, X.shape[1])
 
@@ -131,7 +144,7 @@ def predict():
 
     pred = scaler_y.inverse_transform(pred_reg)[0]
 
-    # SAME smoothing as notebook
+    # SAME SMOOTHING
     pred = pred - np.mean(pred)
     pred = 0.7 * pred + 0.3 * np.mean(pred)
     pred = np.clip(pred, -0.08, 0.08)
@@ -181,7 +194,6 @@ if st.button("🚀 Run Prediction"):
 
     confidence = min(abs(pred[idx]) * 12 + abs(cls[idx] - 0.5), 0.9)
 
-    # colored signal
     if "BUY" in signal:
         st.success(f"📢 {signal}")
     elif "SELL" in signal:
@@ -191,9 +203,9 @@ if st.button("🚀 Run Prediction"):
 
     st.progress(float(confidence))
 
-    # 📉 Chart
+    # CHART
     hist = yf.download(selected_stock, period="6mo")
     if not hist.empty:
         st.line_chart(hist["Close"])
 
-    st.warning("⚠️ This is an AI-based prediction and not financial advice.")
+    st.warning("⚠️ AI prediction — not financial advice")
