@@ -57,6 +57,8 @@ st.set_page_config(page_title="Stock AI", layout="wide")
 
 st.title("📈 Multi-Stock AI Prediction Dashboard")
 
+st.caption("Prediction horizon: next trading step (short-term)")
+
 st.markdown("""
 ### 🤖 Model Overview
 - LSTM + Attention model  
@@ -167,9 +169,8 @@ if st.button("🚀 Run Prediction"):
     col2.metric("📈 Return", f"{pred[idx]*100:.2f}%")
     col3.metric("🔮 Next", f"{next_price[idx]:.2f}")
 
-    # improved confidence
     confidence = min(abs(pred[idx]) * 12 + abs(cls[idx] - 0.5), 0.9)
-    col4.metric("🎯 Confidence", f"{confidence*100:.1f}%")
+    col4.metric("🎯 Model Confidence Score", f"{confidence*100:.1f}%")
 
     # SIGNAL
     if pred[idx] > 0.02:
@@ -192,15 +193,11 @@ if st.button("🚀 Run Prediction"):
     st.write("🧠 Model Insight:")
     st.caption(explain(pred[idx]))
 
-    # =========================
-    # 🚀 BEST STOCK
-    # =========================
+    # BEST STOCK
     best_idx = np.argmax(pred)
     st.success(f"🚀 Best Opportunity: {STOCKS[best_idx]} ({pred[best_idx]*100:.2f}%)")
 
-    # =========================
-    # 📊 TABLE
-    # =========================
+    # TABLE
     def get_signal(p):
         if p > 0.02:
             return "STRONG BUY"
@@ -221,12 +218,13 @@ if st.button("🚀 Run Prediction"):
 
     df_result["Signal"] = df_result["Return (%)"].apply(lambda x: get_signal(x/100))
 
+    # SORT TABLE
+    df_result = df_result.sort_values(by="Return (%)", ascending=False)
+
     st.subheader("📊 All Stock Predictions")
     st.dataframe(df_result, use_container_width=True)
 
-    # =========================
-    # 📥 DOWNLOAD
-    # =========================
+    # DOWNLOAD
     csv = df_result.to_csv(index=False).encode("utf-8")
 
     st.download_button(
@@ -236,9 +234,7 @@ if st.button("🚀 Run Prediction"):
         "text/csv"
     )
 
-    # =========================
-    # 📉 CHART
-    # =========================
+    # CHART
     st.line_chart(df[selected_stock])
 
     st.warning("⚠️ AI prediction — not financial advice")
