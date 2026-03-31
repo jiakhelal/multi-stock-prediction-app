@@ -57,7 +57,7 @@ st.set_page_config(page_title="Stock AI", layout="wide")
 
 st.title("📈 Multi-Stock AI Prediction Dashboard")
 
-st.caption("Prediction horizon: next trading step (short-term)")
+st.caption("Prediction horizon: Next trading day (1-day ahead)")
 
 st.markdown("""
 ### 🤖 Model Overview
