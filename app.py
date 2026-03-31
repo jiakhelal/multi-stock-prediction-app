@@ -61,47 +61,46 @@ st.caption("LSTM + Attention | Multi-Stock Model")
 
 selected_stock = st.selectbox("📊 Select Stock", STOCKS)
 
+st.markdown("""
+### 🤖 About this Model
+- Uses **LSTM + Attention**
+- Learns from **multiple stocks simultaneously**
+- Captures **market correlations & trends**
+""")
+
 # =========================
-# FETCH DATA (NOTEBOOK STYLE)
+# FETCH DATA (NOTEBOOK EXACT)
 # =========================
+@st.cache_data(ttl=3600)
 def fetch_data():
-    data = {}
-
-    for stock in STOCKS:
-        try:
-            df = yf.download(stock, period="60d")
-
-            if df is None or df.empty:
-                continue
-
-            data[stock] = df["Close"]
-
-        except:
-            continue
-
-    if len(data) == 0:
-        st.error("❌ No data received from yfinance")
+    try:
+        df = yf.download(STOCKS, start="2019-01-01")["Close"]
+    except:
         return None
 
-    df = pd.DataFrame(data)
+    if df is None or df.empty:
+        return None
 
-    # same as notebook
-    df = df.dropna()
+    df = df.dropna()  # SAME as notebook
+
+    if df.empty:
+        return None
 
     return df
 
 # =========================
-# PREDICT
+# PREDICTION (NOTEBOOK LOGIC)
 # =========================
 def predict():
 
     df = fetch_data()
     if df is None:
+        st.error("❌ Failed to load stock data")
         return None
 
     df_feat = df.copy()
 
-    # EXACT notebook feature logic
+    # EXACT feature logic
     for s in STOCKS:
         df_feat[f"{s}_RET"] = df_feat[s].pct_change()
         df_feat[f"{s}_MA7"] = df_feat[s].rolling(7).mean()
@@ -114,7 +113,7 @@ def predict():
     df_feat = df_feat.dropna()
 
     if len(df_feat) < SEQ_LEN:
-        st.error("❌ Not enough data")
+        st.error("❌ Not enough processed data")
         return None
 
     # feature alignment
@@ -182,6 +181,7 @@ if st.button("🚀 Run Prediction"):
 
     confidence = min(abs(pred[idx]) * 12 + abs(cls[idx] - 0.5), 0.9)
 
+    # colored signal
     if "BUY" in signal:
         st.success(f"📢 {signal}")
     elif "SELL" in signal:
@@ -191,7 +191,9 @@ if st.button("🚀 Run Prediction"):
 
     st.progress(float(confidence))
 
-    # chart
-    hist = yf.download(selected_stock, period="60d")
+    # 📉 Chart
+    hist = yf.download(selected_stock, period="6mo")
     if not hist.empty:
         st.line_chart(hist["Close"])
+
+    st.warning("⚠️ This is an AI-based prediction and not financial advice.")
