@@ -61,48 +61,34 @@ st.caption("LSTM + Attention | Multi-Stock Model")
 
 selected_stock = st.selectbox("📊 Select Stock", STOCKS)
 
-st.markdown("""
-### 🤖 About this Model
-- Uses **LSTM + Attention**
-- Learns from **multiple stocks simultaneously**
-- Captures **market correlations & trends**
-""")
-
 # =========================
-# FETCH DATA (FIXED)
+# FETCH DATA (NOTEBOOK LOGIC)
 # =========================
 @st.cache_data(ttl=3600)
 def fetch_data():
     data = {}
 
+    # SAME LOGIC AS NOTEBOOK, just looped (for reliability)
     for stock in STOCKS:
-        try:
-            df = yf.download(stock, start="2019-01-01")
+        df = yf.download(stock, start="2019-01-01", progress=False)
 
-            if df is None or df.empty:
-                continue
-
-            data[stock] = df["Close"]
-
-        except Exception as e:
-            print(f"Error loading {stock}: {e}")
+        if df is None or df.empty:
             continue
+
+        data[stock] = df["Close"]
 
     if len(data) == 0:
         return None
 
     df = pd.DataFrame(data)
 
-    # SAME AS NOTEBOOK
+    # EXACT SAME AS NOTEBOOK
     df = df.dropna()
-
-    if df.empty:
-        return None
 
     return df
 
 # =========================
-# PREDICTION
+# PREDICTION (UNCHANGED)
 # =========================
 def predict():
 
@@ -162,8 +148,7 @@ def predict():
 # =========================
 if st.button("🚀 Run Prediction"):
 
-    with st.spinner("Running AI model..."):
-        result = predict()
+    result = predict()
 
     if result is None:
         st.stop()
@@ -204,8 +189,6 @@ if st.button("🚀 Run Prediction"):
     st.progress(float(confidence))
 
     # CHART
-    hist = yf.download(selected_stock, period="6mo")
+    hist = yf.download(selected_stock, period="6mo", progress=False)
     if not hist.empty:
         st.line_chart(hist["Close"])
-
-    st.warning("⚠️ AI prediction — not financial advice")
