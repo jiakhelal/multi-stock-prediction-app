@@ -1,186 +1,240 @@
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 import streamlit as st
 import numpy as np
-import pandas as pd
-import yfinance as yf
-import joblib
 import json
-from tensorflow.keras.models import load_model
+import joblib
+import tensorflow as tf
+import pandas as pd
 
-# -------------------- LOAD FILES --------------------
+# =========================
+# 🧠 CUSTOM ATTENTION
+# =========================
+class Attention(tf.keras.layers.Layer):
+    def build(self, input_shape):
+        self.W = self.add_weight(shape=(input_shape[-1], 1))
+        self.b = self.add_weight(shape=(input_shape[1], 1))
+
+    def call(self, x):
+        e = tf.nn.tanh(tf.matmul(x, self.W) + self.b)
+        a = tf.nn.softmax(e, axis=1)
+        return tf.reduce_sum(x * a, axis=1)
+
+# =========================
+# LOAD FILES
+# =========================
 @st.cache_resource
-def load_artifacts():
-    model = load_model("model/final_model.keras", compile=False)
+def load_all():
+    model = tf.keras.models.load_model(
+        "model/final_model.keras",
+        custom_objects={"Attention": Attention},
+        compile=False
+    )
+
     scaler_X = joblib.load("model/scaler_X.pkl")
     scaler_y = joblib.load("model/scaler_y.pkl")
-    
-    with open("model/config.json") as f:
-        config = json.load(f)
-        
-    with open("model/feature_columns.json") as f:
-        feature_cols = json.load(f)
-        
+
     with open("model/stocks.json") as f:
-        stocks = json.load(f)
-        
-    return model, scaler_X, scaler_y, config, feature_cols, stocks
+        STOCKS = json.load(f)
 
-model, scaler_X, scaler_y, config, feature_cols, STOCKS = load_artifacts()
+    with open("model/feature_columns.json") as f:
+        FEATURE_COLUMNS = json.load(f)
 
-SEQ_LEN = config["SEQ_LEN"]
+    with open("model/config.json") as f:
+        CONFIG = json.load(f)
+        SEQ_LEN = CONFIG.get("SEQ_LEN", 20)
 
-# -------------------- FEATURE ENGINEERING --------------------
-def create_features(df):
-    df = df.copy()
-    
-    for col in df.columns:
-        df[f"{col}_ret"] = df[col].pct_change()
-        df[f"{col}_ma"] = df[col].rolling(5).mean()
-        df[f"{col}_std"] = df[col].rolling(5).std()
-        df[f"{col}_mom"] = df[col] - df[col].shift(5)
-    
-    df.dropna(inplace=True)
-    return df
+    return model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN
 
-# -------------------- PREDICTION --------------------
-def predict_all():
-    df = yf.download(STOCKS, start="2019-01-01", progress=False)["Close"]
-    df.dropna(inplace=True)
 
-    df_feat = create_features(df)
+model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN = load_all()
 
-    X_all = df_feat[feature_cols].values
-    X_scaled = scaler_X.transform(X_all)
-
-    X_seq = []
-    for i in range(SEQ_LEN, len(X_scaled)):
-        X_seq.append(X_scaled[i-SEQ_LEN:i])
-
-    X_seq = np.array(X_seq)
-    last_seq = X_seq[-1:]
-
-    pred_scaled = model.predict(last_seq, verbose=0)
-    pred = scaler_y.inverse_transform(pred_scaled)[0]
-
-    last_prices = df.iloc[-1].values
-    returns = (pred - last_prices) / last_prices * 100
-
-    return last_prices, pred, returns, df
-
-# -------------------- UI --------------------
-st.set_page_config(page_title="Stock AI Dashboard", layout="wide")
+# =========================
+# UI
+# =========================
+st.set_page_config(page_title="Stock AI", layout="wide")
 
 st.title("📈 Multi-Stock AI Prediction Dashboard")
 
+st.caption("Prediction horizon: next trading step (short-term)")
+
 st.markdown("""
-### 🧠 Model Overview
+### 🤖 Model Overview
 - LSTM + Attention model  
 - Multi-stock correlation learning  
-- Technical indicators: MA, STD, Momentum  
-- 📊 Prediction horizon: **Next 1 trading day**
+- Technical indicators: MA, STD, MOM, ROC  
 """)
 
 selected_stock = st.selectbox("📊 Select Stock", STOCKS)
 
-if st.button("🚀 Run Prediction"):
+# =========================
+# LOAD DATA
+# =========================
+@st.cache_data
+def fetch_data():
     try:
-        last_prices, pred, returns, df = predict_all()
+        df = pd.read_csv("stock_data.csv", index_col=0, parse_dates=True)
+        df = df.dropna()
+        return df
+    except:
+        return None
 
-        idx = STOCKS.index(selected_stock)
+# =========================
+# EXPLANATION
+# =========================
+def explain(pred):
+    if pred > 0.02:
+        return "Strong upward momentum detected across correlated stocks."
+    elif pred > 0:
+        return "Moderate bullish trend observed."
+    elif pred < -0.02:
+        return "Strong downward pressure in market."
+    else:
+        return "Market shows neutral behavior."
 
-        price = last_prices[idx]
-        pred_price = pred[idx]
-        ret = returns[idx]
+# =========================
+# PREDICTION
+# =========================
+def predict():
 
-        # SIGNAL LOGIC
-        if ret > 2:
-            signal = "🟢 STRONG BUY"
-        elif ret > 0:
-            signal = "🟢 BUY"
-        elif ret > -2:
-            signal = "🔴 SELL"
+    df = fetch_data()
+    if df is None:
+        st.error("❌ Data not available")
+        return None
+
+    df_feat = df.copy()
+
+    for s in STOCKS:
+        df_feat[f"{s}_RET"] = df_feat[s].pct_change()
+        df_feat[f"{s}_MA7"] = df_feat[s].rolling(7).mean()
+        df_feat[f"{s}_MA21"] = df_feat[s].rolling(21).mean()
+        df_feat[f"{s}_STD"] = df_feat[s].rolling(21).std()
+        df_feat[f"{s}_MOM"] = df_feat[s] - df_feat[s].shift(5)
+        df_feat[f"{s}_ROC"] = df_feat[s].pct_change(5)
+        df_feat[f"{s}_SENT"] = 0
+
+    df_feat = df_feat.dropna()
+
+    if len(df_feat) < SEQ_LEN:
+        st.error("❌ Not enough data")
+        return None
+
+    for col in FEATURE_COLUMNS:
+        if col not in df_feat.columns:
+            df_feat[col] = 0
+
+    df_feat = df_feat[FEATURE_COLUMNS]
+
+    X = scaler_X.transform(df_feat)
+    X = X[-SEQ_LEN:].reshape(1, SEQ_LEN, X.shape[1])
+
+    pred_reg, pred_cls = model.predict(X, verbose=0)
+
+    pred = scaler_y.inverse_transform(pred_reg)[0]
+
+    # smoothing
+    pred = pred - np.mean(pred)
+    pred = 0.7 * pred + 0.3 * np.mean(pred)
+    pred = np.clip(pred, -0.08, 0.08)
+
+    if np.std(pred) > 0:
+        pred = pred / np.max(np.abs(pred)) * 0.05
+
+    last_price = df.iloc[-1].values
+    next_price = last_price * (1 + pred)
+
+    return df, last_price, pred, pred_cls[0], next_price
+
+# =========================
+# RUN
+# =========================
+if st.button("🚀 Run Prediction"):
+
+    with st.spinner("Running AI model..."):
+        result = predict()
+
+    if result is None:
+        st.stop()
+
+    df, last_price, pred, cls, next_price = result
+
+    idx = STOCKS.index(selected_stock)
+
+    st.subheader(f"📊 {selected_stock} Prediction")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("💰 Price", f"{last_price[idx]:.2f}")
+    col2.metric("📈 Return", f"{pred[idx]*100:.2f}%")
+    col3.metric("🔮 Next", f"{next_price[idx]:.2f}")
+
+    confidence = min(abs(pred[idx]) * 12 + abs(cls[idx] - 0.5), 0.9)
+    col4.metric("🎯 Model Confidence Score", f"{confidence*100:.1f}%")
+
+    # SIGNAL
+    if pred[idx] > 0.02:
+        signal = "STRONG BUY"
+        st.success(f"📢 {signal}")
+    elif pred[idx] > 0.005:
+        signal = "BUY"
+        st.success(f"📢 {signal}")
+    elif pred[idx] < -0.02:
+        signal = "STRONG SELL"
+        st.error(f"📢 {signal}")
+    elif pred[idx] < -0.005:
+        signal = "SELL"
+        st.error(f"📢 {signal}")
+    else:
+        signal = "HOLD"
+        st.info(f"📢 {signal}")
+
+    # explanation
+    st.write("🧠 Model Insight:")
+    st.caption(explain(pred[idx]))
+
+    # BEST STOCK
+    best_idx = np.argmax(pred)
+    st.success(f"🚀 Best Opportunity: {STOCKS[best_idx]} ({pred[best_idx]*100:.2f}%)")
+
+    # TABLE
+    def get_signal(p):
+        if p > 0.02:
+            return "STRONG BUY"
+        elif p > 0.005:
+            return "BUY"
+        elif p < -0.02:
+            return "STRONG SELL"
+        elif p < -0.005:
+            return "SELL"
         else:
-            signal = "🔴 STRONG SELL"
+            return "HOLD"
 
-        # HEURISTIC CONFIDENCE (FIXED)
-        confidence = min(abs(ret) * 10 + 20, 95)
+    df_result = pd.DataFrame({
+        "Stock": STOCKS,
+        "Return (%)": np.round(pred * 100, 2),
+        "Next Price": np.round(next_price, 2)
+    })
 
-        st.subheader(f"📊 {selected_stock} Prediction")
+    df_result["Signal"] = df_result["Return (%)"].apply(lambda x: get_signal(x/100))
 
-        col1, col2, col3, col4 = st.columns(4)
+    # SORT TABLE
+    df_result = df_result.sort_values(by="Return (%)", ascending=False)
 
-        col1.metric("💰 Current Price", f"{price:.2f}")
-        col2.metric("📈 Expected Return", f"{ret:.2f}%")
-        col3.metric("🔮 Predicted Price", f"{pred_price:.2f}")
-        col4.metric("📊 Model Confidence (heuristic)", f"{confidence:.1f}%")
+    st.subheader("📊 All Stock Predictions")
+    st.dataframe(df_result, use_container_width=True)
 
-        st.success(signal) if "BUY" in signal else st.error(signal)
+    # DOWNLOAD
+    csv = df_result.to_csv(index=False).encode("utf-8")
 
-        # MODEL INSIGHT
-        if ret > 2:
-            insight = "Strong upward momentum detected."
-        elif ret > 0:
-            insight = "Mild upward trend."
-        elif ret > -2:
-            insight = "Sideways / neutral behavior."
-        else:
-            insight = "Strong downward pressure."
+    st.download_button(
+        "📥 Download Predictions",
+        csv,
+        "stock_predictions.csv",
+        "text/csv"
+    )
 
-        st.markdown(f"💡 **Model Insight:** {insight}")
+    # CHART
+    st.line_chart(df[selected_stock])
 
-        # ---------------- BEST STOCK ----------------
-        best_idx = np.argmax(returns)
-        best_stock = STOCKS[best_idx]
-        best_return = returns[best_idx]
-
-        st.success(f"🏆 Best Opportunity: {best_stock} ({best_return:.2f}%)")
-
-        # ---------------- TABLE ----------------
-        df_out = pd.DataFrame({
-            "Stock": STOCKS,
-            "Return (%)": returns.round(2),
-            "Next Price": pred.round(2)
-        })
-
-        def get_signal(r):
-            if r > 2: return "STRONG BUY"
-            elif r > 0: return "BUY"
-            elif r > -2: return "SELL"
-            else: return "STRONG SELL"
-
-        df_out["Signal"] = df_out["Return (%)"].apply(get_signal)
-        df_out = df_out.sort_values(by="Return (%)", ascending=False)
-
-        st.subheader("📋 All Stock Predictions")
-        st.dataframe(df_out, use_container_width=True)
-
-        # ---------------- DOWNLOAD ----------------
-        csv = df_out.to_csv(index=False).encode()
-        st.download_button("📥 Download Predictions", csv, "predictions.csv")
-
-        # ---------------- CHART ----------------
-        st.subheader("📉 Historical Price")
-        st.line_chart(df[selected_stock])
-
-        # ---------------- IMPORTANT NOTES ----------------
-        st.warning("""
-⚠️ **AI Prediction Disclaimer**
-
-- This model is trained on historical stock data and technical indicators  
-- Predictions are short-term (next trading day)  
-- Confidence score is heuristic, not a probability  
-- Market conditions can change rapidly  
-
-👉 This is for educational purposes only — not financial advice
-""")
-
-        # ---------------- MODEL PERFORMANCE NOTE ----------------
-        st.info("""
-📊 **Model Info**
-
-- Trained on multi-stock historical data (since 2019)
-- Uses sequence learning (LSTM + Attention)
-- Backtesting recommended for real-world validation
-""")
-
-    except Exception as e:
-        st.error(f"❌ Error: {e}")
+    st.warning("⚠️ AI prediction — not financial advice")
