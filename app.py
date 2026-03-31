@@ -79,7 +79,7 @@ def fetch_data():
         return None
 
 # =========================
-# EXPLANATION FUNCTION
+# EXPLANATION
 # =========================
 def explain(pred):
     if pred > 0.02:
@@ -110,7 +110,7 @@ def predict():
         df_feat[f"{s}_STD"] = df_feat[s].rolling(21).std()
         df_feat[f"{s}_MOM"] = df_feat[s] - df_feat[s].shift(5)
         df_feat[f"{s}_ROC"] = df_feat[s].pct_change(5)
-        df_feat[f"{s}_SENT"] = 0  # removed FinBERT
+        df_feat[f"{s}_SENT"] = 0
 
     df_feat = df_feat.dropna()
 
@@ -166,7 +166,10 @@ if st.button("🚀 Run Prediction"):
     col1.metric("💰 Price", f"{last_price[idx]:.2f}")
     col2.metric("📈 Return", f"{pred[idx]*100:.2f}%")
     col3.metric("🔮 Next", f"{next_price[idx]:.2f}")
-    col4.metric("🎯 Confidence", f"{min(abs(pred[idx])*100, 90):.1f}%")
+
+    # improved confidence
+    confidence = min(abs(pred[idx]) * 12 + abs(cls[idx] - 0.5), 0.9)
+    col4.metric("🎯 Confidence", f"{confidence*100:.1f}%")
 
     # SIGNAL
     if pred[idx] > 0.02:
@@ -189,7 +192,53 @@ if st.button("🚀 Run Prediction"):
     st.write("🧠 Model Insight:")
     st.caption(explain(pred[idx]))
 
-    # chart
+    # =========================
+    # 🚀 BEST STOCK
+    # =========================
+    best_idx = np.argmax(pred)
+    st.success(f"🚀 Best Opportunity: {STOCKS[best_idx]} ({pred[best_idx]*100:.2f}%)")
+
+    # =========================
+    # 📊 TABLE
+    # =========================
+    def get_signal(p):
+        if p > 0.02:
+            return "STRONG BUY"
+        elif p > 0.005:
+            return "BUY"
+        elif p < -0.02:
+            return "STRONG SELL"
+        elif p < -0.005:
+            return "SELL"
+        else:
+            return "HOLD"
+
+    df_result = pd.DataFrame({
+        "Stock": STOCKS,
+        "Return (%)": np.round(pred * 100, 2),
+        "Next Price": np.round(next_price, 2)
+    })
+
+    df_result["Signal"] = df_result["Return (%)"].apply(lambda x: get_signal(x/100))
+
+    st.subheader("📊 All Stock Predictions")
+    st.dataframe(df_result, use_container_width=True)
+
+    # =========================
+    # 📥 DOWNLOAD
+    # =========================
+    csv = df_result.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        "📥 Download Predictions",
+        csv,
+        "stock_predictions.csv",
+        "text/csv"
+    )
+
+    # =========================
+    # 📉 CHART
+    # =========================
     st.line_chart(df[selected_stock])
 
     st.warning("⚠️ AI prediction — not financial advice")
