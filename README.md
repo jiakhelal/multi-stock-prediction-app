@@ -83,7 +83,14 @@ The app is deployed using Streamlit Cloud.
 
 ---
 
+🔗 Useful Links
+👉 Live App:
+https://multi-stock-prediction-app-wxrdr9bndbiwzakfxscir.streamlit.app/
+
 ## ⚠️ Note
 
 This project is for learning purposes only.
 It should not be used for real financial decisions.
+
+
+
