@@ -10,7 +10,7 @@ import yfinance as yf
 import pandas as pd
 
 # =========================
-# 🧠 CUSTOM ATTENTION LAYER
+# 🧠 CUSTOM ATTENTION
 # =========================
 class Attention(tf.keras.layers.Layer):
     def build(self, input_shape):
@@ -23,7 +23,7 @@ class Attention(tf.keras.layers.Layer):
         return tf.reduce_sum(x * a, axis=1)
 
 # =========================
-# LOAD ALL FILES
+# LOAD FILES
 # =========================
 @st.cache_resource
 def load_all():
@@ -59,77 +59,65 @@ st.set_page_config(page_title="Stock AI", layout="wide")
 st.title("📈 Multi-Stock AI Prediction Dashboard")
 st.caption("LSTM + Attention | Multi-Stock Model")
 
-selected_stocks = st.multiselect(
-    "📊 Select Stocks to View",
-    STOCKS,
-    default=STOCKS[:3]
-)
+selected_stock = st.selectbox("📊 Select Stock", STOCKS)
 
 # =========================
-# SAFE DATA FETCH
+# FETCH DATA (NOTEBOOK STYLE)
 # =========================
 def fetch_data():
-    try:
-        df = yf.download(STOCKS, period="60d")["Close"]
-    except:
-        st.error("❌ Failed to fetch stock data")
-        return None
+    data = {}
 
-    if df is None or df.empty:
+    for stock in STOCKS:
+        try:
+            df = yf.download(stock, period="60d")
+
+            if df is None or df.empty:
+                continue
+
+            data[stock] = df["Close"]
+
+        except:
+            continue
+
+    if len(data) == 0:
         st.error("❌ No data received from yfinance")
         return None
 
-    # 🔥 Remove completely broken stocks
-    df = df.dropna(axis=1, how="all")
+    df = pd.DataFrame(data)
 
-    if df.shape[1] == 0:
-        st.error("❌ All stocks failed to load")
-        return None
-
+    # same as notebook
     df = df.dropna()
 
     return df
 
 # =========================
-# PREDICTION
+# PREDICT
 # =========================
-def predict_all():
+def predict():
 
     df = fetch_data()
     if df is None:
         return None
 
-    valid_stocks = df.columns.tolist()
-
     df_feat = df.copy()
 
-    # 🔥 Feature Engineering (SAFE)
-    for s in valid_stocks:
-        try:
-            series = df_feat[s]
-
-            if series.isnull().all():
-                continue
-
-            df_feat[f"{s}_RET"] = series.pct_change()
-            df_feat[f"{s}_MA7"] = series.rolling(7).mean()
-            df_feat[f"{s}_MA21"] = series.rolling(21).mean()
-            df_feat[f"{s}_STD"] = series.rolling(21).std()
-            df_feat[f"{s}_MOM"] = series - series.shift(5)
-            df_feat[f"{s}_ROC"] = series.pct_change(5)
-            df_feat[f"{s}_SENT"] = 0
-
-        except Exception as e:
-            print(f"Skipping {s}: {e}")
-            continue
+    # EXACT notebook feature logic
+    for s in STOCKS:
+        df_feat[f"{s}_RET"] = df_feat[s].pct_change()
+        df_feat[f"{s}_MA7"] = df_feat[s].rolling(7).mean()
+        df_feat[f"{s}_MA21"] = df_feat[s].rolling(21).mean()
+        df_feat[f"{s}_STD"] = df_feat[s].rolling(21).std()
+        df_feat[f"{s}_MOM"] = df_feat[s] - df_feat[s].shift(5)
+        df_feat[f"{s}_ROC"] = df_feat[s].pct_change(5)
+        df_feat[f"{s}_SENT"] = 0
 
     df_feat = df_feat.dropna()
 
     if len(df_feat) < SEQ_LEN:
-        st.error("❌ Not enough data after preprocessing")
+        st.error("❌ Not enough data")
         return None
 
-    # ensure feature consistency
+    # feature alignment
     for col in FEATURE_COLUMNS:
         if col not in df_feat.columns:
             df_feat[col] = 0
@@ -144,7 +132,7 @@ def predict_all():
 
     pred = scaler_y.inverse_transform(pred_reg)[0]
 
-    # 🔥 smoothing logic (same as training)
+    # SAME smoothing as notebook
     pred = pred - np.mean(pred)
     pred = 0.7 * pred + 0.3 * np.mean(pred)
     pred = np.clip(pred, -0.08, 0.08)
@@ -155,56 +143,55 @@ def predict_all():
     last_price = df.iloc[-1].values
     next_price = last_price * (1 + pred)
 
-    return last_price, pred, pred_cls[0], next_price, valid_stocks
+    return df, last_price, pred, pred_cls[0], next_price
 
 # =========================
 # RUN
 # =========================
 if st.button("🚀 Run Prediction"):
 
-    result = predict_all()
+    with st.spinner("Running AI model..."):
+        result = predict()
 
     if result is None:
         st.stop()
 
-    last_price, pred, cls, next_price, valid_stocks = result
+    df, last_price, pred, cls, next_price = result
 
-    st.subheader("📊 Predictions")
+    idx = STOCKS.index(selected_stock)
 
-    for s in selected_stocks:
+    st.subheader(f"📊 {selected_stock} Prediction")
 
-        if s not in valid_stocks:
-            st.warning(f"⚠️ {s} data not available")
-            continue
+    col1, col2, col3 = st.columns(3)
 
-        idx = valid_stocks.index(s)
+    col1.metric("💰 Current Price", f"{last_price[idx]:.2f}")
+    col2.metric("📈 Return", f"{pred[idx]*100:.2f}%")
+    col3.metric("🔮 Next Price", f"{next_price[idx]:.2f}")
 
-        col1, col2, col3 = st.columns(3)
+    # SIGNAL
+    if pred[idx] > 0.02:
+        signal = "STRONG BUY"
+    elif pred[idx] > 0.005:
+        signal = "BUY"
+    elif pred[idx] < -0.02:
+        signal = "STRONG SELL"
+    elif pred[idx] < -0.005:
+        signal = "SELL"
+    else:
+        signal = "HOLD"
 
-        col1.metric("💰 Current Price", f"{last_price[idx]:.2f}")
-        col2.metric("📈 Return", f"{pred[idx]*100:.2f}%")
-        col3.metric("🔮 Next Price", f"{next_price[idx]:.2f}")
+    confidence = min(abs(pred[idx]) * 12 + abs(cls[idx] - 0.5), 0.9)
 
-        # SIGNAL
-        if pred[idx] > 0.02:
-            signal = "STRONG BUY"
-        elif pred[idx] > 0.005:
-            signal = "BUY"
-        elif pred[idx] < -0.02:
-            signal = "STRONG SELL"
-        elif pred[idx] < -0.005:
-            signal = "SELL"
-        else:
-            signal = "HOLD"
+    if "BUY" in signal:
+        st.success(f"📢 {signal}")
+    elif "SELL" in signal:
+        st.error(f"📢 {signal}")
+    else:
+        st.info(f"📢 {signal}")
 
-        confidence = min(abs(pred[idx]) * 12 + abs(cls[idx] - 0.5), 0.9)
+    st.progress(float(confidence))
 
-        st.write(f"📢 Signal: **{signal}**")
-        st.progress(float(confidence))
-
-        # chart
-        hist = yf.download(s, period="60d")
-        if not hist.empty:
-            st.line_chart(hist["Close"])
-
-        st.divider()
+    # chart
+    hist = yf.download(selected_stock, period="60d")
+    if not hist.empty:
+        st.line_chart(hist["Close"])
