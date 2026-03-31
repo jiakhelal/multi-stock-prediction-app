@@ -56,28 +56,40 @@ model, scaler_X, scaler_y, STOCKS, FEATURE_COLUMNS, SEQ_LEN = load_all()
 st.set_page_config(page_title="Stock AI", layout="wide")
 
 st.title("📈 Multi-Stock AI Prediction Dashboard")
-st.caption("LSTM + Attention | Multi-Stock Model")
+
+st.markdown("""
+### 🤖 Model Overview
+- LSTM + Attention model  
+- Multi-stock correlation learning  
+- Technical indicators: MA, STD, MOM, ROC  
+""")
 
 selected_stock = st.selectbox("📊 Select Stock", STOCKS)
 
 # =========================
-# FETCH DATA (CSV - FIXED)
+# LOAD DATA
 # =========================
 @st.cache_data
 def fetch_data():
     try:
         df = pd.read_csv("stock_data.csv", index_col=0, parse_dates=True)
-    except Exception as e:
-        st.error(f"❌ Failed to load CSV: {e}")
+        df = df.dropna()
+        return df
+    except:
         return None
 
-    # SAME AS NOTEBOOK
-    df = df.dropna()
-
-    if df.empty:
-        return None
-
-    return df
+# =========================
+# EXPLANATION FUNCTION
+# =========================
+def explain(pred):
+    if pred > 0.02:
+        return "Strong upward momentum detected across correlated stocks."
+    elif pred > 0:
+        return "Moderate bullish trend observed."
+    elif pred < -0.02:
+        return "Strong downward pressure in market."
+    else:
+        return "Market shows neutral behavior."
 
 # =========================
 # PREDICTION
@@ -91,7 +103,6 @@ def predict():
 
     df_feat = df.copy()
 
-    # EXACT FEATURE LOGIC
     for s in STOCKS:
         df_feat[f"{s}_RET"] = df_feat[s].pct_change()
         df_feat[f"{s}_MA7"] = df_feat[s].rolling(7).mean()
@@ -99,22 +110,20 @@ def predict():
         df_feat[f"{s}_STD"] = df_feat[s].rolling(21).std()
         df_feat[f"{s}_MOM"] = df_feat[s] - df_feat[s].shift(5)
         df_feat[f"{s}_ROC"] = df_feat[s].pct_change(5)
-        df_feat[f"{s}_SENT"] = 0
+        df_feat[f"{s}_SENT"] = 0  # removed FinBERT
 
     df_feat = df_feat.dropna()
 
     if len(df_feat) < SEQ_LEN:
-        st.error("❌ Not enough processed data")
+        st.error("❌ Not enough data")
         return None
 
-    # FEATURE ALIGNMENT
     for col in FEATURE_COLUMNS:
         if col not in df_feat.columns:
             df_feat[col] = 0
 
     df_feat = df_feat[FEATURE_COLUMNS]
 
-    # SCALE
     X = scaler_X.transform(df_feat)
     X = X[-SEQ_LEN:].reshape(1, SEQ_LEN, X.shape[1])
 
@@ -122,7 +131,7 @@ def predict():
 
     pred = scaler_y.inverse_transform(pred_reg)[0]
 
-    # SAME SMOOTHING
+    # smoothing
     pred = pred - np.mean(pred)
     pred = 0.7 * pred + 0.3 * np.mean(pred)
     pred = np.clip(pred, -0.08, 0.08)
@@ -140,7 +149,8 @@ def predict():
 # =========================
 if st.button("🚀 Run Prediction"):
 
-    result = predict()
+    with st.spinner("Running AI model..."):
+        result = predict()
 
     if result is None:
         st.stop()
@@ -151,36 +161,35 @@ if st.button("🚀 Run Prediction"):
 
     st.subheader(f"📊 {selected_stock} Prediction")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
-    col1.metric("💰 Current Price", f"{last_price[idx]:.2f}")
+    col1.metric("💰 Price", f"{last_price[idx]:.2f}")
     col2.metric("📈 Return", f"{pred[idx]*100:.2f}%")
-    col3.metric("🔮 Next Price", f"{next_price[idx]:.2f}")
+    col3.metric("🔮 Next", f"{next_price[idx]:.2f}")
+    col4.metric("🎯 Confidence", f"{min(abs(pred[idx])*100, 90):.1f}%")
 
     # SIGNAL
     if pred[idx] > 0.02:
         signal = "STRONG BUY"
+        st.success(f"📢 {signal}")
     elif pred[idx] > 0.005:
         signal = "BUY"
+        st.success(f"📢 {signal}")
     elif pred[idx] < -0.02:
         signal = "STRONG SELL"
+        st.error(f"📢 {signal}")
     elif pred[idx] < -0.005:
         signal = "SELL"
-    else:
-        signal = "HOLD"
-
-    confidence = min(abs(pred[idx]) * 12 + abs(cls[idx] - 0.5), 0.9)
-
-    if "BUY" in signal:
-        st.success(f"📢 {signal}")
-    elif "SELL" in signal:
         st.error(f"📢 {signal}")
     else:
+        signal = "HOLD"
         st.info(f"📢 {signal}")
 
-    st.progress(float(confidence))
+    # explanation
+    st.write("🧠 Model Insight:")
+    st.caption(explain(pred[idx]))
 
-    # CHART (from CSV)
+    # chart
     st.line_chart(df[selected_stock])
 
     st.warning("⚠️ AI prediction — not financial advice")
