@@ -85,7 +85,7 @@ The app is deployed using Streamlit Cloud.
 
 🔗 Useful Links
 👉 Live App:
-https://multi-stock-prediction-app-wxrdr9bndbiwzakfxscir.streamlit.app/
+https://multi-stock-prediction-app-wxrdrr9bndbiwzakfxscir.streamlit.app/
 
 ## ⚠️ Note
 
